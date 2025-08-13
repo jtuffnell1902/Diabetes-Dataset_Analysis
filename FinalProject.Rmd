@@ -1,0 +1,174 @@
+---
+title: '**Foundations of Data Science**'
+subtitle: '**Final Project**'
+author: '**Jenna Tuffnell**'
+date: 'Due: May 13, 2025'
+output:  pdf_document
+---
+\hrule
+
+# Diabetes
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+```{r}
+# Packages we will use.
+library(dplyr)
+library(ggplot2)
+library(caret) # package for "classification and regression training"
+library(class) # for knn
+library(gmodels) # for testing the accuracy of predictions
+library(corrplot)
+library(knitr)
+library(factoextra)
+```
+
+## R Markdown
+
+First, we used principal component analysis to test which variables we should use for the kNN clustering. 
+
+```{r}
+diabetes_data <- read.csv("diabetes_dataset.csv", header=TRUE)
+str(diabetes_data)
+```
+
+
+Since all the data is not numeric, I am checking for null values and filtering out solumns to only use numerical data.
+
+```{r}
+colSums(is.na(diabetes_data))
+diabetes_data2 <- select(diabetes, -X, -Sex, -Ethnicity, -Physical_Activity_Level, -Smoking_Status, -Alcohol_Consumption)
+      
+numerical_data <- diabetes_data2[]
+
+head(numerical_data)
+```
+Rank variables to use: 
+```{r}
+scaled_data <- scale(numerical_data)
+pca_result <- prcomp(scaled_data, center = TRUE, scale. = TRUE)
+print(summary(pca_result))
+```
+```{r}
+explained_variance <- summary(pca_result)$importance[2,]
+cumulative_variance <- cumsum(explained_variance)
+num_components <- which(cumulative_variance >= 0.90)[1]
+print(num_components)
+```
+
+We also constructed a correlation plot for each variable to see if any variables seem correlated. 
+```{r}
+library(corrplot)
+cor(diabetes_data2)
+corrplot(cor(diabetes_data2), method='color')
+```
+It appears that there are no strongly correlated variables and the PCA did not provide any conclusive results to help us pick which variables to use. For this reason, we will pick our own variables which will be: 
+
+Next, we will use k-nearest neighbors to try to have the system predict who 
+
+```{r}
+diabetes_Summary <- summarize(group_by(diabetes_data, HbA1c), Count=n(), Percentage=n()/nrow(diabetes_data2)*100)
+kable(diabetes_Summary)
+```
+In order to successfully do k-Nearest Neighbors Clustering, we have to create a categorical variable from the dataset for all values over 6.5 to define them as diabetic. 
+
+```{r}
+diabetes_data2$HbA1c_levels <- cut(diabetes_data2$HbA1c,
+                      breaks = c(0, 5.7, 6.4, Inf),
+                      labels = c("Normal", "Pre-diabetic", "Diabetic"))
+diabetes_data2$HbA1c_levels <- as.factor(diabetes_data2$HbA1c_levels)
+```
+
+I am testing to see if it correctly sorted the data below with this table
+
+```{r}
+table(diabetes_data2$HbA1c_levels)
+```
+Based off of this categorization, we can compare this directly to the confusion matrix after we use kNN clustering to test accuracy. 
+
+```{r}
+X_diabetes <- diabetes_data[ , c("BMI", "Age", "Waist_Circumference", "Cholesterol_LDL", "Family_History_of_Diabetes", "Fasting_Blood_Glucose")] # first space for rows, if you don't specify it includes all
+y_diabetes <- diabetes_data2$HbA1c_levels
+```
+Here we are splitting the data into "test" and "training" data. 
+```{r}
+set.seed(123)
+inTrain <- createDataPartition(y = y_diabetes, p = 0.75, list = FALSE)
+```
+
+```{r}
+X_train <- scale(X_diabetes[inTrain, ])
+y_train <- y_diabetes[inTrain]
+
+X_test <- scale(X_diabetes[-inTrain, ]) #the minus excludes the values specified
+y_test <- y_diabetes[-inTrain]
+```
+Here I will test for the best number k to use
+```{r}
+set.seed(456)
+diabetes_pred <- knn(train = X_train, test = X_test, cl = y_train, k=1)
+fit <- train(x = X_train,
+             y = y_train, 
+             method = "knn",
+             tuneGrid = data.frame(k=c(1:25)),
+             trControl = trainControl(method = "cv", number = 5),
+             metric = "Accuracy")
+fit
+```
+
+
+```{r}
+diabetes_pred <- knn(train = X_train, test = X_test, cl = y_train, k=22)
+CrossTable(x = y_test, y = diabetes_pred, prop.chisq = FALSE)
+mean(diabetes_pred==y_test)
+mean(y_diabetes==0)
+```
+The dataset is unbalanced with significantly more diabetics than not, so we will do kmeans clustering within the diabetics alone. To do so, I will make a new variable with only the diabetics.
+```{r}
+diabetes_data$HbA1c_levels <- cut(diabetes_data2$HbA1c,
+                      breaks = c(6.4, Inf),
+                      labels = c("Diabetic"))
+diabetes_data$HbA1c_levels <- as.factor(diabetes_data$HbA1c_levels)
+```
+We will make a scree-plot to use the elbow method to determine which variables to use for k-means clustering using only the diabetics.
+```{r}
+diabetes_data2$HbA1c <- as.numeric(as.character(diabetes_data2$HbA1c))
+diabetes_data2_filtered <- subset(diabetes_data2, HbA1c >= 6.4)
+```
+
+
+```{r}
+diabetic_data <- subset(diabetes_data, HbA1c_levels == "Diabetic")
+diabetic_numeric <- diabetic_data %>% 
+  select(-HbA1c_levels, -HbA1c) %>% 
+  select(where(is.numeric))
+```
+```{r}
+set.seed(789)
+fviz_nbclust(diabetic_numeric, kmeans, method = "wss", k.max = 10)
+```
+After doing some research, I discovered that HDL cholesterol (the "good cholesterol") can be an indicator of Type 1 diabetes because insulin actually plays a crucial role in your HDL cholesterol metabolism. In individuals who are insulin deficient, such as type 1 diabetics, HDL tends to be higher to compensate for the lack of insulin. For this reason, I tested k-means clustering against HbA1c levels (key indicator for all diabetics) and HDL cholesterol levels. 
+```{r}
+diabetic_numeric <- select(diabetes, BMI, Age, Waist_Circumference, Cholesterol_LDL, Cholesterol_HDL, Family_History_of_Diabetes, HbA1c)
+
+scaled_diabetic_numeric <- scale(select(diabetic_numeric, -Family_History_of_Diabetes))
+
+set.seed(123)
+kmeans_result <- kmeans(scaled_diabetic_numeric, centers = 3)
+
+diabetic_numeric$Cluster <- as.factor(kmeans_result$cluster)
+
+ggplot(diabetic_numeric, aes(x = Cholesterol_HDL, y = HbA1c, color = Cluster)) +
+  geom_point() +
+  labs(title = "K-Means Clustering of Diabetes Data (k = 3)",
+       subtitle = "HDL Cholesterol vs HbA1c by Cluster",
+       x = "HDL Cholesterol",
+       y = "HbA1c")
+
+```
+
+ 
+
+
